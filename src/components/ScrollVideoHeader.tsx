@@ -8,12 +8,12 @@ if (typeof window !== "undefined") {
   gsap.registerPlugin(ScrollTrigger);
 }
 
-const V1_FRAMES = 60;
-const V2_FRAMES = 60;
+const V1_FRAMES = 42;
+const V2_FRAMES = 42;
 const TOTAL_FRAMES = V1_FRAMES + V2_FRAMES;
 
-const NATIVE_W = 1280;
-const NATIVE_H = 852;
+const NATIVE_W = 1024;
+const NATIVE_H = 681;
 
 function urlFor(group: "v1" | "v2", n: number) {
   return `/frames/${group}/f${String(n).padStart(3, "0")}.jpg`;
@@ -136,14 +136,14 @@ export default function ScrollVideoHeader() {
     if (!section || !overlay) return;
     if (!ready) return;
 
-    // 0% -> p1End : video1 (frames 0..59)
-    // p1End -> p2Start : overlay BRASIL HEXA visible over LAST frame of video1 (frame 59 frozen)
-    // p2Start -> 100% : video2 (frames 60..119)
-    const p1End = 0.45;
-    const p2Start = 0.55;
+    // 0% -> p1End : video1 (frames 0..N-1)
+    // p1End -> p2Start : overlay BRASIL É HEXA over LAST frame of video1 (frozen)
+    // p2Start -> 100% : video2 (frames 0..N-1)
+    // Bigger hold window for the text so it has time to breathe
+    const p1End = 0.40;
+    const p2Start = 0.60;
 
-    // Total scroll distance
-    const totalScroll = 4800;
+    const totalScroll = 4200;
 
     const ctx = gsap.context(() => {
       gsap.set(overlay, { autoAlpha: 0 });
@@ -235,21 +235,24 @@ export default function ScrollVideoHeader() {
       {/* Vignette */}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/80" />
 
-      {/* "BRASIL HEXA" overlay */}
+      {/* "BRASIL É HEXA" overlay */}
       <div
         ref={overlayRef}
         style={{ opacity: 0, transform: "scale(0.7)", filter: "blur(20px)" }}
-        className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/55 backdrop-blur-[2px]"
+        className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/65 backdrop-blur-[3px]"
       >
         <div className="text-center">
-          <p className="font-display text-[10vw] leading-[0.9] text-white drop-shadow-[0_0_60px_rgba(250,204,21,0.6)]">
+          <p className="font-display text-[11vw] leading-[0.9] text-white drop-shadow-[0_0_60px_rgba(250,204,21,0.6)]">
             <span className="shine-text">BRASIL</span>
           </p>
-          <p className="mt-2 font-display text-[15vw] leading-[0.85] tracking-tight text-brand-yellow drop-shadow-[0_0_80px_rgba(22,163,74,0.7)]">
+          <p className="font-display text-[6vw] leading-[1] text-white/90 drop-shadow-[0_0_30px_rgba(255,255,255,0.4)]">
+            É
+          </p>
+          <p className="font-display text-[16vw] leading-[0.85] tracking-tight text-brand-yellow drop-shadow-[0_0_80px_rgba(22,163,74,0.7)]">
             HEXA
           </p>
           <p className="mt-6 text-sm uppercase tracking-[0.5em] text-white/80">
-            o sexto está chegando
+            o sexto título tá chegando
           </p>
         </div>
       </div>
