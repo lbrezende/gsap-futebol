@@ -8,141 +8,237 @@ if (typeof window !== "undefined") {
   gsap.registerPlugin(ScrollTrigger);
 }
 
+const V1_FRAMES = 60;
+const V2_FRAMES = 60;
+const TOTAL_FRAMES = V1_FRAMES + V2_FRAMES;
+
+const NATIVE_W = 1280;
+const NATIVE_H = 852;
+
+function urlFor(group: "v1" | "v2", n: number) {
+  return `/frames/${group}/f${String(n).padStart(3, "0")}.jpg`;
+}
+
 export default function ScrollVideoHeader() {
   const sectionRef = useRef<HTMLDivElement>(null);
-  const v1Ref = useRef<HTMLVideoElement>(null);
-  const v2Ref = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const stateRef = useRef({ frame: 0, overlay: 0 });
+  const imagesRef = useRef<HTMLImageElement[]>([]);
 
-  const [v1Ready, setV1Ready] = useState(false);
-  const [v2Ready, setV2Ready] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [ready, setReady] = useState(false);
 
+  // Preload all frames into Image objects
   useEffect(() => {
-    const section = sectionRef.current;
-    const v1 = v1Ref.current;
-    const v2 = v2Ref.current;
-    const overlay = overlayRef.current;
-    if (!section || !v1 || !v2 || !overlay) return;
-    if (!v1Ready || !v2Ready) return;
+    let cancelled = false;
+    const all: HTMLImageElement[] = [];
+    let loaded = 0;
 
-    const d1 = v1.duration || 1;
-    const d2 = v2.duration || 1;
-
-    // Total scroll distance — scaled by total video duration so we have ~600px
-    // of scroll per second of video. Smooth scrub feel.
-    const totalScroll = Math.round((d1 + d2) * 600 + 800);
-
-    // Phase split: video1 plays for d1/(d1+d2) of the timeline, then a brief
-    // overlay reveal, then video2 plays for d2/(d1+d2). The overlay window is
-    // a small fraction of total time.
-    const overlayShare = 0.12;
-    const movingShare = 1 - overlayShare;
-    const p1 = (d1 / (d1 + d2)) * movingShare;
-    const p2 = movingShare - p1;
-
-    // Initial state
-    gsap.set(v2, { autoAlpha: 0 });
-    gsap.set(v1, { autoAlpha: 1 });
-    gsap.set(overlay, { autoAlpha: 0 });
-    v1.currentTime = 0;
-    v2.currentTime = 0;
-
-    const ctx = gsap.context(() => {
-      const tl = gsap.timeline({
-        scrollTrigger: {
-          trigger: section,
-          start: "top top",
-          end: `+=${totalScroll}`,
-          scrub: 1.2,
-          pin: true,
-          anticipatePin: 1,
-          invalidateOnRefresh: true,
-        },
+    function makeOne(src: string) {
+      return new Promise<HTMLImageElement>((resolve) => {
+        const img = new Image();
+        img.decoding = "async";
+        img.src = src;
+        img.onload = () => {
+          loaded += 1;
+          setProgress(loaded / TOTAL_FRAMES);
+          resolve(img);
+        };
+        img.onerror = () => {
+          loaded += 1;
+          setProgress(loaded / TOTAL_FRAMES);
+          resolve(img);
+        };
       });
+    }
 
-      // PHASE 1 — video1 plays 0 -> end (linear)
-      tl.to(v1, {
-        currentTime: Math.max(0.01, d1 - 0.05),
-        ease: "none",
-        duration: p1,
-      }, 0);
+    (async () => {
+      // Prioritize first frames so we can paint immediately
+      const urls: string[] = [];
+      for (let i = 1; i <= V1_FRAMES; i++) urls.push(urlFor("v1", i));
+      for (let i = 1; i <= V2_FRAMES; i++) urls.push(urlFor("v2", i));
 
-      // PHASE 2 — overlay BRASIL HEXA fades in over the LAST FRAME of video1
-      // (video1 stays visible, frozen at last frame)
-      const overlayStart = p1;
-      const overlayDur = overlayShare;
-
-      tl.fromTo(
-        overlay,
-        { autoAlpha: 0, scale: 0.7, filter: "blur(20px)" },
-        { autoAlpha: 1, scale: 1, filter: "blur(0px)", ease: "power3.out", duration: overlayDur * 0.45 },
-        overlayStart
+      // Load first 8 sequentially, rest in parallel
+      for (let i = 0; i < Math.min(8, urls.length); i++) {
+        if (cancelled) return;
+        const img = await makeOne(urls[i]);
+        all[i] = img;
+        if (i === 0) {
+          // First frame ready — draw immediately
+          imagesRef.current = all;
+          drawFrame(0);
+        }
+      }
+      // Rest in parallel
+      const rest = urls.slice(8).map((u, idx) =>
+        makeOne(u).then((img) => {
+          all[idx + 8] = img;
+        })
       );
-      // Hold visible at full opacity
-      tl.to(overlay, { autoAlpha: 1, duration: overlayDur * 0.20 }, overlayStart + overlayDur * 0.45);
-      // Fade out + zoom (transitioning to video2)
-      tl.to(
-        overlay,
-        { autoAlpha: 0, scale: 1.15, filter: "blur(8px)", ease: "power2.in", duration: overlayDur * 0.35 },
-        overlayStart + overlayDur * 0.65
-      );
-
-      // Crossfade: video1 -> video2 happens during overlay tail
-      const crossStart = overlayStart + overlayDur * 0.55;
-      tl.to(v1, { autoAlpha: 0, ease: "power1.inOut", duration: overlayDur * 0.45 }, crossStart);
-      tl.to(v2, { autoAlpha: 1, ease: "power1.inOut", duration: overlayDur * 0.45 }, crossStart);
-
-      // PHASE 3 — video2 plays 0 -> end
-      tl.to(v2, {
-        currentTime: Math.max(0.01, d2 - 0.05),
-        ease: "none",
-        duration: p2,
-      }, p1 + overlayShare);
-    }, section);
-
-    const refresh = () => ScrollTrigger.refresh();
-    window.addEventListener("resize", refresh);
+      await Promise.all(rest);
+      if (cancelled) return;
+      imagesRef.current = all;
+      setReady(true);
+    })();
 
     return () => {
-      window.removeEventListener("resize", refresh);
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Canvas drawing — object-cover behavior
+  function drawFrame(idx: number) {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const imgs = imagesRef.current;
+    const img = imgs[Math.max(0, Math.min(imgs.length - 1, idx))];
+    if (!img || !img.complete || img.naturalWidth === 0) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Match canvas to viewport size with DPR
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cw = canvas.clientWidth;
+    const ch = canvas.clientHeight;
+    if (canvas.width !== cw * dpr || canvas.height !== ch * dpr) {
+      canvas.width = Math.floor(cw * dpr);
+      canvas.height = Math.floor(ch * dpr);
+    }
+
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, cw, ch);
+
+    // object-cover: fit canvas, crop image
+    const iw = img.naturalWidth || NATIVE_W;
+    const ih = img.naturalHeight || NATIVE_H;
+    const cs = cw / ch;
+    const is = iw / ih;
+    let sx = 0, sy = 0, sw = iw, sh = ih;
+    if (is > cs) {
+      sw = ih * cs;
+      sx = (iw - sw) / 2;
+    } else {
+      sh = iw / cs;
+      sy = (ih - sh) / 2;
+    }
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, cw, ch);
+    ctx.restore();
+  }
+
+  // Set up ScrollTrigger
+  useEffect(() => {
+    const section = sectionRef.current;
+    const overlay = overlayRef.current;
+    if (!section || !overlay) return;
+    if (!ready) return;
+
+    // 0% -> p1End : video1 (frames 0..59)
+    // p1End -> p2Start : overlay BRASIL HEXA visible over LAST frame of video1 (frame 59 frozen)
+    // p2Start -> 100% : video2 (frames 60..119)
+    const p1End = 0.45;
+    const p2Start = 0.55;
+
+    // Total scroll distance
+    const totalScroll = 4800;
+
+    const ctx = gsap.context(() => {
+      gsap.set(overlay, { autoAlpha: 0 });
+
+      ScrollTrigger.create({
+        trigger: section,
+        start: "top top",
+        end: `+=${totalScroll}`,
+        scrub: 1.0,
+        pin: true,
+        anticipatePin: 1,
+        invalidateOnRefresh: true,
+        onUpdate: (self) => {
+          const p = self.progress;
+
+          let frame = 0;
+          let overlayAlpha = 0;
+          let overlayScale = 0.7;
+          let overlayBlur = 20;
+
+          if (p <= p1End) {
+            // Phase 1 — video1
+            const t = p / p1End;
+            frame = Math.min(V1_FRAMES - 1, Math.floor(t * V1_FRAMES));
+          } else if (p < p2Start) {
+            // Phase 2 — last frame of video1, overlay reveals
+            frame = V1_FRAMES - 1;
+            const t = (p - p1End) / (p2Start - p1End);
+            // 0 -> 0.5 : reveal, 0.5 -> 1 : hold (will fade out next phase via crossfade)
+            const reveal = Math.min(1, t * 2);
+            overlayAlpha = reveal;
+            overlayScale = 0.7 + 0.3 * reveal;
+            overlayBlur = 20 - 20 * reveal;
+          } else {
+            // Phase 3 — video2 (overlay fades out at start)
+            const t = (p - p2Start) / (1 - p2Start);
+            // First 20% of phase 3 still has overlay fading out
+            if (t < 0.2) {
+              const fade = 1 - t / 0.2;
+              overlayAlpha = fade;
+              overlayScale = 1 + (1 - fade) * 0.15;
+              overlayBlur = (1 - fade) * 8;
+              frame = V1_FRAMES - 1;
+            } else {
+              const t2 = (t - 0.2) / 0.8;
+              frame = V1_FRAMES + Math.min(V2_FRAMES - 1, Math.floor(t2 * V2_FRAMES));
+            }
+          }
+
+          if (frame !== stateRef.current.frame) {
+            stateRef.current.frame = frame;
+            drawFrame(frame);
+          }
+
+          // Apply overlay style directly (cheap)
+          overlay.style.opacity = String(overlayAlpha);
+          overlay.style.transform = `scale(${overlayScale})`;
+          overlay.style.filter = `blur(${overlayBlur}px)`;
+        },
+      });
+    }, section);
+
+    const onResize = () => {
+      drawFrame(stateRef.current.frame);
+      ScrollTrigger.refresh();
+    };
+    window.addEventListener("resize", onResize);
+
+    // Initial paint
+    drawFrame(0);
+
+    return () => {
+      window.removeEventListener("resize", onResize);
       ctx.revert();
     };
-  }, [v1Ready, v2Ready]);
+  }, [ready]);
 
   return (
     <section
       ref={sectionRef}
       className="relative h-screen w-full overflow-hidden bg-black"
     >
-      <video
-        ref={v1Ref}
-        src="/jogador1.mp4"
-        muted
-        playsInline
-        preload="auto"
-        onLoadedMetadata={() => setV1Ready(true)}
-        onLoadedData={() => setV1Ready(true)}
-        className="absolute inset-0 h-full w-full object-cover"
-      />
-      <video
-        ref={v2Ref}
-        src="/jogador2.mp4"
-        muted
-        playsInline
-        preload="auto"
-        onLoadedMetadata={() => setV2Ready(true)}
-        onLoadedData={() => setV2Ready(true)}
-        style={{ opacity: 0 }}
-        className="absolute inset-0 h-full w-full object-cover"
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 h-full w-full"
+        style={{ display: "block" }}
       />
 
       {/* Vignette */}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/80" />
 
-      {/* "BRASIL HEXA" overlay (over last frame of video 1) */}
+      {/* "BRASIL HEXA" overlay */}
       <div
         ref={overlayRef}
-        style={{ opacity: 0 }}
+        style={{ opacity: 0, transform: "scale(0.7)", filter: "blur(20px)" }}
         className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/55 backdrop-blur-[2px]"
       >
         <div className="text-center">
@@ -176,10 +272,27 @@ export default function ScrollVideoHeader() {
         </a>
       </div>
 
+      {/* Loading bar (only while frames preloading) */}
+      {!ready && (
+        <div className="absolute bottom-12 left-1/2 z-30 -translate-x-1/2 text-center">
+          <div className="h-1 w-48 overflow-hidden rounded-full bg-white/10">
+            <div
+              className="h-full bg-brand-yellow transition-[width]"
+              style={{ width: `${Math.round(progress * 100)}%` }}
+            />
+          </div>
+          <p className="mt-2 text-xs uppercase tracking-[0.4em] text-white/50">
+            preparando o chute…
+          </p>
+        </div>
+      )}
+
       {/* Scroll hint */}
-      <div className="absolute bottom-8 left-1/2 z-30 -translate-x-1/2 text-center text-xs uppercase tracking-[0.5em] text-white/60">
-        role para chutar ↓
-      </div>
+      {ready && (
+        <div className="absolute bottom-8 left-1/2 z-30 -translate-x-1/2 text-center text-xs uppercase tracking-[0.5em] text-white/60">
+          role para chutar ↓
+        </div>
+      )}
     </section>
   );
 }
